@@ -1,0 +1,28 @@
+/**
+ * Decode a File (PNG/JPG/WebP/...) into raw RGBA pixel data via the browser's
+ * Canvas API. Lives on the main thread (no wasm dependency).
+ *
+ * Transparent pixels in the source are pre-composited against `bgColor`
+ * (default white). This is critical for VTracer — it traces RGB, not alpha,
+ * so a transparent PNG with a black foreground would otherwise look like
+ * "all black" to the tracer (RGB=000 everywhere, alpha just varies) and
+ * trace nothing.
+ */
+export async function decodeImage(
+  file: File,
+  bgColor: string = '#ffffff',
+): Promise<{ data: Uint8Array; width: number; height: number }> {
+  const bitmap = await createImageBitmap(file);
+  const { width, height } = bitmap;
+  const canvas = new OffscreenCanvas(width, height);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Failed to get 2D context');
+  // Pre-fill so any transparent regions in the source become this color
+  // BEFORE the source is drawn on top.
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  const imageData = ctx.getImageData(0, 0, width, height);
+  return { data: new Uint8Array(imageData.data.buffer), width, height };
+}
