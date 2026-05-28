@@ -8,7 +8,7 @@
 [![Built with Astro](https://img.shields.io/badge/Built%20with-Astro-BC52EE)](https://astro.build/)
 [![Engine: VTracer](https://img.shields.io/badge/Engine-VTracer%20(WASM)-orange)](https://github.com/visioncortex/vtracer)
 
-**Live demo:** _coming soon_ · **License:** MIT · **No server, no upload, no signup**
+**Live demo:** [oss.cver.net/vectorize](https://oss.cver.net/vectorize/) · **License:** MIT · **No server, no upload, no signup**
 
 [**English**](#english) ・ [**日本語**](#日本語)
 
@@ -46,7 +46,7 @@ good output behind a paywall, or are stuck on dated algorithms. `vectorize`:
 
 ### Quick start (use online)
 
-Open `https://vectorize.cver.net` (coming soon) and drag an image in.
+Open [`https://oss.cver.net/vectorize/`](https://oss.cver.net/vectorize/) and drag an image in.
 
 ### Self-host
 
@@ -152,7 +152,7 @@ welcome.
 
 ### 使い方（オンライン版）
 
-`https://vectorize.cver.net` を開いて画像をドラッグするだけ（公開予定）。
+[`https://oss.cver.net/vectorize/`](https://oss.cver.net/vectorize/) を開いて画像をドラッグするだけ。
 
 ### セルフホスト
 

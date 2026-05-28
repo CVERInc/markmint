@@ -3,7 +3,8 @@ import svelte from '@astrojs/svelte';
 import wasm from 'vite-plugin-wasm';
 
 export default defineConfig({
-  site: 'https://vectorize.cver.net',
+  site: 'https://oss.cver.net',
+  base: '/vectorize',
   integrations: [svelte()],
   vite: {
     plugins: [wasm()],
