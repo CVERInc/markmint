@@ -13,19 +13,6 @@ import Vectorizer from '~/components/Vectorizer.svelte';
     </header>
 
     <Vectorizer client:only="svelte" />
-
-    <footer>
-      <p class="meta">
-        <a href="https://github.com/CVERInc/vectorize" rel="noopener">GitHub</a>
-        <span class="sep">·</span>
-        <span>MIT</span>
-        <span class="sep">·</span>
-        <span>Powered by <a href="https://github.com/visioncortex/vtracer" rel="noopener">VTracer</a> (WASM)</span>
-      </p>
-      <p>
-        Built by <a href="https://cver.net" rel="noopener">CVER Inc.</a>
-      </p>
-    </footer>
   </main>
 </Layout>
 
@@ -49,26 +36,5 @@ import Vectorizer from '~/components/Vectorizer.svelte';
     color: var(--muted);
     font-size: 1.0625rem;
     margin: 0;
-  }
-  .sep {
-    color: var(--border);
-  }
-  footer {
-    margin-top: 4rem;
-    text-align: center;
-    font-size: 0.875rem;
-    color: var(--muted);
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-  footer p {
-    margin: 0;
-  }
-  footer .meta {
-    display: flex;
-    justify-content: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
   }
 </style>
