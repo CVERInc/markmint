@@ -1149,6 +1149,52 @@
     saveBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), 'txt', `${stripExtension(file.name)}-ascii`);
   }
 
+  // ── Live ASCII preview panel ────────────────────────────────────────────────
+  let asciiOn = $state(false);
+  let asciiArt = $state('');
+  let asciiBusy = $state(false);
+  let asciiSeq = 0;
+
+  // Recompute the preview (debounced) whenever the mark, backdrop or width
+  // changes — but only while the panel is open, to avoid idle rasterizing.
+  $effect(() => {
+    // tracked dependencies (read synchronously)
+    const live = displaySvg;
+    const cols = asciiCols;
+    const bd = `${backdrop.color}${backdrop.alpha}${backdrop.aspect}${backdrop.padding}${backdrop.radius}`;
+    const enabled = asciiOn;
+    void cols;
+    void bd;
+    void live;
+    if (!enabled || !svg) {
+      asciiArt = '';
+      return;
+    }
+    const seq = ++asciiSeq;
+    asciiBusy = true;
+    const timer = setTimeout(async () => {
+      const text = await buildAsciiText();
+      if (seq === asciiSeq) {
+        asciiArt = text ?? '';
+        asciiBusy = false;
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  });
+
+  async function copyAsciiArt() {
+    if (!asciiArt) return;
+    try {
+      await navigator.clipboard.writeText(asciiArt);
+      copiedKind = 'ascii';
+      clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => (copiedKind = null), 1500);
+    } catch (err) {
+      errorMessage = err instanceof Error ? err.message : String(err);
+      status = 'error';
+    }
+  }
+
   function reset() {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     if (debounceTimer) clearTimeout(debounceTimer);
@@ -1410,6 +1456,36 @@
               {/if}
             </div>
           </div>
+
+          <div class="card-row" style="width: 100%;">
+            <span class="card-label">ASCII art</span>
+            <label class="fx-toggle" style="margin-left:auto;">
+              <input type="checkbox" bind:checked={asciiOn} />
+              <span>Show</span>
+            </label>
+          </div>
+          {#if asciiOn}
+            <div class="ascii-panel">
+              <div class="slider tight">
+                <div class="slider-head">
+                  <label for="ascii-cols">Width</label>
+                  <span class="value">{asciiCols} cols</span>
+                </div>
+                <input id="ascii-cols" type="range" min="20" max="200" step="2" bind:value={asciiCols} />
+              </div>
+              <pre class="ascii-preview" class:busy={asciiBusy} aria-label="ASCII preview">{asciiArt || '…'}</pre>
+              <div class="ascii-actions">
+                <button type="button" class="tiny-btn" onclick={copyAsciiArt} disabled={!asciiArt}>
+                  <Copy size={12} />
+                  <span>{copiedKind === 'ascii' ? 'Copied ✓' : 'Copy'}</span>
+                </button>
+                <button type="button" class="tiny-btn" onclick={downloadAscii} disabled={!asciiArt}>
+                  <Download size={12} />
+                  <span>.txt</span>
+                </button>
+              </div>
+            </div>
+          {/if}
 
           {#if pathList.length > 0}
             <div class="layers">
@@ -1829,18 +1905,6 @@
                     <button type="button" role="menuitem" onclick={() => copyAs('datauri')}>
                       Data URI{copiedKind === 'datauri' ? ' ✓' : ''}
                     </button>
-                    <div class="copy-divider" aria-hidden="true"></div>
-                    <button type="button" role="menuitem" onclick={() => copyAs('ascii')}>
-                      ASCII art{copiedKind === 'ascii' ? ' ✓' : ''}
-                    </button>
-                    <button type="button" role="menuitem" onclick={downloadAscii}>
-                      ASCII → .txt
-                    </button>
-                    <label class="copy-ascii-cols">
-                      <span>Width</span>
-                      <input type="number" min="20" max="400" step="10" bind:value={asciiCols} />
-                      <span>cols</span>
-                    </label>
                   </div>
                 </details>
               </div>
@@ -2985,27 +3049,36 @@
   .copy-options button:hover {
     background: var(--accent-bg);
   }
-  .copy-divider {
-    height: 1px;
-    margin: 0.25rem 0.3rem;
-    background: var(--border);
-  }
-  .copy-ascii-cols {
+  /* ── ASCII art panel ── */
+  .ascii-panel {
     display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0.35rem 0.6rem;
-    font-size: 0.75rem;
-    color: var(--muted);
-  }
-  .copy-ascii-cols input {
-    width: 4rem;
-    background: rgba(255, 255, 255, 0.05);
-    color: var(--text);
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 0.6rem 0.7rem;
     border: 1px solid var(--border);
-    border-radius: 5px;
-    padding: 0.2rem 0.35rem;
-    font-family: inherit;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+  }
+  .ascii-preview {
+    margin: 0;
+    max-height: 220px;
+    overflow: auto;
+    padding: 0.6rem;
+    border-radius: 6px;
+    background: #041e1f;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    line-height: 1;
+    white-space: pre;
+    transition: opacity 0.15s;
+  }
+  .ascii-preview.busy {
+    opacity: 0.5;
+  }
+  .ascii-actions {
+    display: flex;
+    gap: 0.4rem;
   }
   .export-select {
     display: inline-flex;
