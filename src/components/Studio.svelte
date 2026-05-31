@@ -81,12 +81,14 @@
   } from '~/lib/compose-layers';
   import Plus from '@lucide/svelte/icons/plus';
   import Eye from '@lucide/svelte/icons/eye';
+  import Images from '@lucide/svelte/icons/images';
   import Undo2 from '@lucide/svelte/icons/undo-2';
   import Redo2 from '@lucide/svelte/icons/redo-2';
   import Wand2 from '@lucide/svelte/icons/wand-2';
   import { History } from '~/lib/history';
   import { detectBackgroundColor, type PathBox } from '~/lib/background';
   import { applyEffects, type EffectOptions } from '~/lib/effects';
+  import { buildSizeSet, DEFAULT_SCALES } from '~/lib/export-set';
   import {
     loadGradientPresets,
     addGradientPreset,
@@ -888,13 +890,14 @@
   let rasterSize = $state<number>(512); // longest edge in px (0 = source resolution)
   let exporting = $state(false);
 
-  async function rasterize(finalSvg: string, fmt: RasterFmt): Promise<Blob> {
+  async function rasterize(finalSvg: string, fmt: RasterFmt, sizeOverride?: number): Promise<Blob> {
     const vb = readViewBox(finalSvg);
     const ar = vb && vb.h > 0 ? vb.w / vb.h : 1;
     const longest =
-      rasterSize > 0
+      sizeOverride ??
+      (rasterSize > 0
         ? rasterSize
-        : Math.max(pixelsCache?.width ?? 512, pixelsCache?.height ?? 512);
+        : Math.max(pixelsCache?.width ?? 512, pixelsCache?.height ?? 512));
     const w = ar >= 1 ? longest : Math.max(1, Math.round(longest * ar));
     const h = ar >= 1 ? Math.max(1, Math.round(longest / ar)) : longest;
 
@@ -949,6 +952,32 @@
     try {
       const blob = await rasterize(finalSvg, downloadFormat);
       saveBlob(blob, downloadFormat === 'jpeg' ? 'jpg' : downloadFormat);
+    } catch (err) {
+      errorMessage = err instanceof Error ? err.message : String(err);
+      status = 'error';
+    } finally {
+      exporting = false;
+    }
+  }
+
+  // Export the same raster at @1x/@2x/@3x, bundled as a zip.
+  async function downloadSizeSet() {
+    if (!svg || !file || exporting) return;
+    const finalSvg = buildFinalSvg();
+    if (!finalSvg) return;
+    const fmt: RasterFmt = downloadFormat === 'svg' ? 'png' : downloadFormat;
+    const ext = fmt === 'jpeg' ? 'jpg' : fmt;
+    const base = rasterSize > 0 ? rasterSize : 512;
+    const name = stripExtension(file.name) || 'icon';
+    exporting = true;
+    try {
+      const files: Record<string, Uint8Array> = {};
+      for (const { size, suffix } of buildSizeSet(base, DEFAULT_SCALES)) {
+        const blob = await rasterize(finalSvg, fmt, size);
+        files[`${name}${suffix}.${ext}`] = new Uint8Array(await blob.arrayBuffer());
+      }
+      const zipped = zipSync(files, { level: 6 });
+      saveBlob(new Blob([zipped], { type: 'application/zip' }), 'zip', `${name}-${ext}-sizes`);
     } catch (err) {
       errorMessage = err instanceof Error ? err.message : String(err);
       status = 'error';
@@ -1717,6 +1746,16 @@
                     <Package size={16} />
                   {/if}
                   <span>Icon pack</span>
+                </button>
+                <button
+                  class="ghost"
+                  type="button"
+                  onclick={downloadSizeSet}
+                  disabled={exporting}
+                  title="Export the raster at @1x / @2x / @3x as a zip"
+                >
+                  <Images size={16} />
+                  <span>@1–3×</span>
                 </button>
                 <details class="copy-menu">
                   <summary class="ghost" title="Copy the result to the clipboard">
