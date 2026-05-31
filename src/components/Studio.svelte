@@ -73,6 +73,14 @@
     toReactComponent,
     toVueComponent,
   } from '~/lib/copy-as';
+  import {
+    composeLayers,
+    IDENTITY_TRANSFORM,
+    type ComposeLayer,
+    type LayerTransform,
+  } from '~/lib/compose-layers';
+  import Plus from '@lucide/svelte/icons/plus';
+  import Eye from '@lucide/svelte/icons/eye';
   import type { WorkerRequest, WorkerResponse } from '~/lib/trace.worker';
   import CompareSlider from './CompareSlider.svelte';
 
@@ -88,8 +96,42 @@
   let livePreview = $state(true);
   let optimize = $state(true);
 
-  let svg = $state<string | null>(null);
-  let outputBytes = $state(0);
+  // The primary image's traced SVG (the one the left panel tunes). The
+  // pipeline consumes `svg`, which is the composition of this base layer plus
+  // any added image layers — see the `svg` derived below.
+  let baseSvg = $state<string | null>(null);
+  let baseTransform = $state<LayerTransform>({ ...IDENTITY_TRANSFORM });
+  let baseHidden = $state(false);
+
+  // Extra image layers, each independently traced and composited into the
+  // single mark. Empty = classic single-image behaviour (byte-identical).
+  interface ImageLayer {
+    id: number;
+    name: string;
+    previewUrl: string;
+    rawSvg: string | null; // null until its trace finishes
+    transform: LayerTransform;
+    hidden: boolean;
+  }
+  let extraLayers = $state<ImageLayer[]>([]);
+  let selectedLayerId = $state<number | 'base'>('base');
+  let nextLayerId = 1;
+
+  // Composed mark fed to the whole edit/export pipeline. A lone, untransformed
+  // base passes through verbatim (composeLayers short-circuits), so adding no
+  // layers changes nothing.
+  const svg = $derived.by<string | null>(() => {
+    if (baseSvg == null) return null;
+    const layers: ComposeLayer[] = [{ svg: baseSvg, transform: baseTransform, hidden: baseHidden }];
+    for (const l of extraLayers) {
+      if (l.rawSvg) layers.push({ svg: l.rawSvg, transform: l.transform, hidden: l.hidden });
+    }
+    return composeLayers(layers);
+  });
+  const hasLayers = $derived(extraLayers.length > 0);
+  // Always reflects the composed output, not just the base trace.
+  const outputBytes = $derived(svg ? new TextEncoder().encode(svg).length : 0);
+
   let durationMs = $state(0);
   let status = $state<Status>('idle');
   let errorMessage = $state<string | null>(null);
@@ -244,7 +286,9 @@
 
   let worker: Worker | null = null;
   let pendingId = 0;
-  let lastId = 0;
+  let lastBaseId = 0; // most-recent base-trace request (older ones are stale)
+  // Routes each worker request to its target: the base image or a layer id.
+  const pendingTargets = new Map<number, number | 'base'>();
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   const presetLabel = $derived(PRESETS.find((p) => p.id === preset)?.label ?? '');
@@ -266,15 +310,24 @@
     customPresets = loadCustomPresets();
     worker = new Worker(new URL('../lib/trace.worker.ts', import.meta.url), { type: 'module' });
     worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
-      if (e.data.id !== lastId) return;
-      if (e.data.type === 'done') {
-        svg = e.data.svg;
-        outputBytes = new TextEncoder().encode(e.data.svg).length;
+      const target = pendingTargets.get(e.data.id);
+      if (target === undefined) return; // stale / unknown request
+      pendingTargets.delete(e.data.id);
+
+      if (e.data.type === 'error') {
+        errorMessage = e.data.message;
+        status = 'error';
+        return;
+      }
+      if (target === 'base') {
+        if (e.data.id !== lastBaseId) return; // a newer base trace superseded this
+        baseSvg = e.data.svg;
         durationMs = e.data.durationMs;
         status = 'done';
       } else {
-        errorMessage = e.data.message;
-        status = 'error';
+        const layer = extraLayers.find((l) => l.id === target);
+        if (layer) layer.rawSvg = e.data.svg; // $state is deep-reactive
+        status = 'done';
       }
     };
   });
@@ -283,6 +336,7 @@
     if (debounceTimer) clearTimeout(debounceTimer);
     if (worker) worker.terminate();
     if (previewUrl) URL.revokeObjectURL(previewUrl);
+    for (const l of extraLayers) URL.revokeObjectURL(l.previewUrl);
   });
 
   function selectPreset(id: PresetId) {
@@ -481,9 +535,14 @@
       return;
     }
     if (previewUrl) URL.revokeObjectURL(previewUrl);
+    // A fresh primary image starts a new composition.
+    clearExtraLayers();
+    baseTransform = { ...IDENTITY_TRANSFORM };
+    baseHidden = false;
+    selectedLayerId = 'base';
     file = f;
     previewUrl = URL.createObjectURL(f);
-    svg = null;
+    baseSvg = null;
     errorMessage = null;
     status = 'idle';
 
@@ -514,14 +573,113 @@
     if (f) pickFile(f);
   }
 
+  // ── Image layers: add / remove / order / position ──────────────────────────
+  function clearExtraLayers() {
+    for (const l of extraLayers) URL.revokeObjectURL(l.previewUrl);
+    extraLayers = [];
+  }
+
+  async function addImageLayer(f: File) {
+    if (!/^image\/(png|jpe?g|webp|bmp)$/i.test(f.type)) {
+      errorMessage = `Unsupported file type: ${f.type || 'unknown'}`;
+      status = 'error';
+      return;
+    }
+    if (!worker) return;
+    const id = nextLayerId++;
+    const layer: ImageLayer = {
+      id,
+      name: f.name,
+      previewUrl: URL.createObjectURL(f),
+      rawSvg: null,
+      transform: { ...IDENTITY_TRANSFORM },
+      hidden: false,
+    };
+    extraLayers = [...extraLayers, layer];
+    selectedLayerId = id;
+    try {
+      const decoded = await decodeImage(f);
+      const reqId = ++pendingId;
+      pendingTargets.set(reqId, id);
+      status = 'converting';
+      const clone = decoded.data.buffer.slice(0);
+      const req: WorkerRequest = {
+        id: reqId,
+        pixels: clone,
+        width: decoded.width,
+        height: decoded.height,
+        params: { ...params }, // traced with the current preset/params
+        optimize,
+      };
+      worker.postMessage(req, [clone]);
+    } catch (err) {
+      errorMessage = err instanceof Error ? err.message : String(err);
+      status = 'error';
+    }
+  }
+
+  function onAddLayerInput(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const f = input.files?.[0];
+    if (f) addImageLayer(f);
+    input.value = ''; // allow re-adding the same file
+  }
+
+  function removeLayer(id: number | 'base') {
+    if (id === 'base') return; // base can't be removed, only replaced
+    const layer = extraLayers.find((l) => l.id === id);
+    if (layer) URL.revokeObjectURL(layer.previewUrl);
+    extraLayers = extraLayers.filter((l) => l.id !== id);
+    if (selectedLayerId === id) selectedLayerId = 'base';
+  }
+
+  function toggleLayerHidden(id: number | 'base') {
+    if (id === 'base') baseHidden = !baseHidden;
+    else {
+      const l = extraLayers.find((x) => x.id === id);
+      if (l) l.hidden = !l.hidden;
+    }
+  }
+
+  function moveLayer(id: number | 'base', dir: -1 | 1) {
+    if (id === 'base') return;
+    const i = extraLayers.findIndex((l) => l.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= extraLayers.length) return;
+    const next = [...extraLayers];
+    [next[i], next[j]] = [next[j], next[i]];
+    extraLayers = next;
+  }
+
+  /** The transform of whichever layer the position panel is editing. */
+  const selectedTransform = $derived.by<LayerTransform>(() => {
+    if (selectedLayerId === 'base') return baseTransform;
+    return extraLayers.find((l) => l.id === selectedLayerId)?.transform ?? baseTransform;
+  });
+  const selectedHidden = $derived(
+    selectedLayerId === 'base'
+      ? baseHidden
+      : (extraLayers.find((l) => l.id === selectedLayerId)?.hidden ?? false),
+  );
+
+  function updateSelectedTransform(patch: Partial<LayerTransform>) {
+    if (selectedLayerId === 'base') {
+      baseTransform = { ...baseTransform, ...patch };
+    } else {
+      const l = extraLayers.find((x) => x.id === selectedLayerId);
+      if (l) l.transform = { ...l.transform, ...patch };
+    }
+  }
+
   function runConvert() {
     if (!pixelsCache || !worker) return;
     errorMessage = null;
     status = 'converting';
-    lastId = ++pendingId;
+    lastBaseId = ++pendingId;
+    pendingTargets.set(lastBaseId, 'base');
     const clone = pixelsCache.buffer.slice(0);
     const req: WorkerRequest = {
-      id: lastId,
+      id: lastBaseId,
       pixels: clone,
       width: pixelsCache.width,
       height: pixelsCache.height,
@@ -759,11 +917,14 @@
   function reset() {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     if (debounceTimer) clearTimeout(debounceTimer);
+    clearExtraLayers();
+    baseTransform = { ...IDENTITY_TRANSFORM };
+    baseHidden = false;
+    selectedLayerId = 'base';
     file = null;
     previewUrl = null;
     pixelsCache = null;
-    svg = null;
-    outputBytes = 0;
+    baseSvg = null;
     durationMs = 0;
     errorMessage = null;
     status = 'idle';
@@ -1317,6 +1478,81 @@
                 </details>
               </div>
             </div>
+
+            <!-- Image layers: compose several traced images into one mark -->
+            <div class="image-layers">
+              <div class="layers-row">
+                <button
+                  type="button"
+                  class="layer-chip"
+                  class:active={selectedLayerId === 'base'}
+                  class:dim={baseHidden}
+                  onclick={() => (selectedLayerId = 'base')}
+                  title="Base image"
+                >
+                  {#if previewUrl}<img src={previewUrl} alt="" />{/if}
+                  <span class="chip-name">Base</span>
+                </button>
+                {#each extraLayers as l, i (l.id)}
+                  <button
+                    type="button"
+                    class="layer-chip"
+                    class:active={selectedLayerId === l.id}
+                    class:dim={l.hidden || !l.rawSvg}
+                    onclick={() => (selectedLayerId = l.id)}
+                    title={l.name}
+                  >
+                    <img src={l.previewUrl} alt="" />
+                    <span class="chip-name">{l.rawSvg ? `#${i + 2}` : '…'}</span>
+                  </button>
+                {/each}
+                <label class="add-layer" title="Add another image as a layer">
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/bmp"
+                    onchange={onAddLayerInput}
+                    hidden
+                  />
+                  <Plus size={16} />
+                  <span>Add image</span>
+                </label>
+              </div>
+
+              {#if hasLayers}
+                <div class="layer-controls">
+                  <div class="layer-actions">
+                    <button type="button" class="tiny-btn" onclick={() => toggleLayerHidden(selectedLayerId)}>
+                      {#if selectedHidden}<Eye size={12} /><span>Show</span>{:else}<EyeOff size={12} /><span>Hide</span>{/if}
+                    </button>
+                    {#if selectedLayerId !== 'base'}
+                      <button type="button" class="tiny-btn" onclick={() => moveLayer(selectedLayerId, -1)} title="Send backward">↓</button>
+                      <button type="button" class="tiny-btn" onclick={() => moveLayer(selectedLayerId, 1)} title="Bring forward">↑</button>
+                      <button type="button" class="tiny-btn" onclick={() => removeLayer(selectedLayerId)}>
+                        <Trash2 size={12} /><span>Remove</span>
+                      </button>
+                    {/if}
+                  </div>
+                  <div class="layer-sliders">
+                    <label class="layer-slider">
+                      <span>Scale</span>
+                      <input type="range" min="0.1" max="2" step="0.05" value={selectedTransform.scale}
+                        oninput={(e) => updateSelectedTransform({ scale: +(e.currentTarget as HTMLInputElement).value })} />
+                    </label>
+                    <label class="layer-slider">
+                      <span>X</span>
+                      <input type="range" min="-0.5" max="0.5" step="0.01" value={selectedTransform.dx}
+                        oninput={(e) => updateSelectedTransform({ dx: +(e.currentTarget as HTMLInputElement).value })} />
+                    </label>
+                    <label class="layer-slider">
+                      <span>Y</span>
+                      <input type="range" min="-0.5" max="0.5" step="0.01" value={selectedTransform.dy}
+                        oninput={(e) => updateSelectedTransform({ dy: +(e.currentTarget as HTMLInputElement).value })} />
+                    </label>
+                  </div>
+                </div>
+              {/if}
+            </div>
+
             <div class="editor-toolbar">
               <div class="tool-group">
                 <button
@@ -2423,6 +2659,87 @@
   }
 
   /* ─── Editor Toolbar ─── */
+  /* ── Image layers strip ── */
+  .image-layers {
+    padding: 0.6rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .layers-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .layer-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.25rem 0.5rem 0.25rem 0.25rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 0.78rem;
+    transition: border-color 0.15s, background 0.15s, opacity 0.15s;
+  }
+  .layer-chip img {
+    width: 28px;
+    height: 28px;
+    object-fit: contain;
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .layer-chip.active {
+    border-color: var(--accent);
+    background: var(--accent-bg);
+  }
+  .layer-chip.dim {
+    opacity: 0.45;
+  }
+  .add-layer {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.7rem;
+    border-radius: 8px;
+    border: 1px dashed var(--border);
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 0.78rem;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .add-layer:hover {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+  .layer-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1rem;
+    margin-top: 0.55rem;
+  }
+  .layer-actions {
+    display: inline-flex;
+    gap: 0.35rem;
+  }
+  .layer-sliders {
+    display: inline-flex;
+    gap: 0.85rem;
+    flex-wrap: wrap;
+  }
+  .layer-slider {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.72rem;
+    color: var(--muted);
+  }
+  .layer-slider input[type='range'] {
+    width: 92px;
+  }
   .editor-toolbar {
     display: flex;
     align-items: center;
