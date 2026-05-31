@@ -49,6 +49,12 @@
     type PathState,
     type PathInfo,
   } from '~/lib/path-state';
+  import {
+    applyColorGradients,
+    shade,
+    GRADIENT_PRESETS,
+    type GradientSpec,
+  } from '~/lib/gradient';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import type { WorkerRequest, WorkerResponse } from '~/lib/vectorize.worker';
   import CompareSlider from './CompareSlider.svelte';
@@ -77,6 +83,8 @@
 
   let backdrop = $state<BackdropOpts>({ ...DEFAULT_BACKDROP });
   let pathStates = $state<Map<number, PathState>>(new Map());
+  // Per-color-group gradient fills, keyed by the group's original fill hex.
+  let colorGradients = $state<Map<string, GradientSpec>>(new Map());
   let expandedGroups = $state<Set<string>>(new Set());
   let hoveredPathIdx = $state<number | null>(null);
   let speckleThreshold = $state(0);
@@ -181,7 +189,11 @@
   const removedIdxs = $derived(collectRemoved(pathStates));
   const displaySvg = $derived.by(() => {
     if (!withOverrides) return null;
-    return removedIdxs.length > 0 ? removePaths(withOverrides, removedIdxs) : withOverrides;
+    const withGradients =
+      colorGradients.size > 0
+        ? applyColorGradients(withOverrides, colorGradients, pathList)
+        : withOverrides;
+    return removedIdxs.length > 0 ? removePaths(withGradients, removedIdxs) : withGradients;
   });
 
   // Reset per-path state whenever the source SVG changes (new trace).
@@ -190,6 +202,7 @@
     if (svg !== lastSvgRef) {
       lastSvgRef = svg;
       pathStates = new Map();
+      colorGradients = new Map();
       expandedGroups = new Set();
       hoveredPathIdx = null;
       speckleThreshold = 0;
@@ -298,8 +311,51 @@
   function bulkRemove(originalFill: string, removed: boolean) {
     pathStates = bulkSetRemoved(pathStates, pathList, originalFill, removed);
   }
+
+  // ── Gradient fills (per color group) ──────────────────────────────
+  function setColorGradient(key: string, spec: GradientSpec | undefined) {
+    const next = new Map(colorGradients);
+    if (spec) next.set(key, spec);
+    else next.delete(key);
+    colorGradients = next;
+  }
+  function toggleGroupGradient(key: string, baseFill: string) {
+    if (colorGradients.has(key)) {
+      setColorGradient(key, undefined);
+    } else {
+      setColorGradient(key, {
+        stops: [
+          { color: baseFill, offset: 0 },
+          { color: shade(baseFill, 0.55), offset: 100 },
+        ],
+        angle: 90,
+      });
+    }
+  }
+  function setGradientStop(key: string, i: number, color: string) {
+    const cur = colorGradients.get(key);
+    if (!cur) return;
+    const stops = cur.stops.map((s, idx) => (idx === i ? { ...s, color } : s));
+    setColorGradient(key, { ...cur, stops });
+  }
+  function setGradientAngle(key: string, angle: number) {
+    const cur = colorGradients.get(key);
+    if (!cur) return;
+    setColorGradient(key, { ...cur, angle });
+  }
+  function applyGradientPreset(key: string, a: string, b: string, angle: number) {
+    setColorGradient(key, {
+      stops: [
+        { color: a, offset: 0 },
+        { color: b, offset: 100 },
+      ],
+      angle,
+    });
+  }
+
   function resetAllPaths() {
     pathStates = new Map();
+    colorGradients = new Map();
     speckleThreshold = 0;
   }
   function runSmartClean() {
@@ -463,7 +519,12 @@
     if (!svg) return null;
     const tagged = injectOrigIdx(svg);
     const overridden = applyPathOverrides(tagged, pathStates);
-    const removed = removedIdxs.length > 0 ? removePaths(overridden, removedIdxs) : overridden;
+    // Gradients need data-orig-idx, so apply before the strip below.
+    const gradiented =
+      colorGradients.size > 0
+        ? applyColorGradients(overridden, colorGradients, pathList)
+        : overridden;
+    const removed = removedIdxs.length > 0 ? removePaths(gradiented, removedIdxs) : gradiented;
     // Strip the data-orig-idx attrs from the final output (clean SVG)
     const cleaned = removed.replace(/\sdata-orig-idx="\d+"/g, '');
     return bakeBackdrop(cleaned, backdrop);
@@ -771,6 +832,7 @@
                 {@const groupFill = group.paths[0]
                   ? (pathStates.get(group.paths[0].origIdx)?.fill ?? group.color)
                   : group.color}
+                {@const grad = colorGradients.get(group.color)}
                 <div class="layer-group">
                   <div class="group-row">
                     <button
@@ -781,16 +843,35 @@
                     >
                       <ChevronRight size={12} class={expanded ? 'rotated' : ''} />
                     </button>
-                    <label class="layer-swatch" class:hidden={allRemoved} style:background={allRemoved ? undefined : groupFill}>
+                    <label
+                      class="layer-swatch"
+                      class:hidden={allRemoved}
+                      style:background={allRemoved
+                        ? undefined
+                        : grad
+                          ? `linear-gradient(${grad.angle + 90}deg, ${grad.stops[0].color}, ${grad.stops[grad.stops.length - 1].color})`
+                          : groupFill}
+                    >
                       <input
                         type="color"
                         value={groupFill}
                         oninput={(e) => bulkColor(group.color, (e.target as HTMLInputElement).value)}
-                        disabled={allRemoved}
+                        disabled={allRemoved || !!grad}
                         aria-label="Recolor all {group.paths.length} paths of {group.color}"
                       />
                     </label>
                     <span class="layer-meta">{group.paths.length} path{group.paths.length === 1 ? '' : 's'}</span>
+                    <button
+                      class="grad-toggle"
+                      class:on={!!grad}
+                      type="button"
+                      disabled={allRemoved}
+                      onclick={() => toggleGroupGradient(group.color, groupFill)}
+                      aria-label={grad ? 'Remove gradient' : 'Add gradient fill'}
+                      title={grad ? 'Remove gradient' : 'Gradient fill'}
+                    >
+                      <span class="grad-chip"></span>
+                    </button>
                     <button
                       class="layer-hide"
                       class:on={allRemoved}
@@ -801,6 +882,48 @@
                       <EyeOff size={11} />
                     </button>
                   </div>
+                  {#if grad}
+                    <div class="grad-editor">
+                      <label class="grad-stop" style:background={grad.stops[0].color}>
+                        <input
+                          type="color"
+                          value={grad.stops[0].color}
+                          oninput={(e) => setGradientStop(group.color, 0, (e.target as HTMLInputElement).value)}
+                          aria-label="Gradient start color"
+                        />
+                      </label>
+                      <input
+                        class="grad-angle-range"
+                        type="range"
+                        min="0"
+                        max="360"
+                        step="15"
+                        value={grad.angle}
+                        oninput={(e) => setGradientAngle(group.color, +(e.target as HTMLInputElement).value)}
+                        aria-label="Gradient angle"
+                      />
+                      <label class="grad-stop" style:background={grad.stops[grad.stops.length - 1].color}>
+                        <input
+                          type="color"
+                          value={grad.stops[grad.stops.length - 1].color}
+                          oninput={(e) => setGradientStop(group.color, grad.stops.length - 1, (e.target as HTMLInputElement).value)}
+                          aria-label="Gradient end color"
+                        />
+                      </label>
+                      <div class="grad-presets">
+                        {#each GRADIENT_PRESETS as gp (gp.name)}
+                          <button
+                            type="button"
+                            class="grad-preset"
+                            style:background={`linear-gradient(${gp.angle + 90}deg, ${gp.a}, ${gp.b})`}
+                            onclick={() => applyGradientPreset(group.color, gp.a, gp.b, gp.angle)}
+                            title={gp.name}
+                            aria-label="Apply {gp.name} gradient"
+                          ></button>
+                        {/each}
+                      </div>
+                    </div>
+                  {/if}
                   {#if expanded}
                     <ul class="layer-children">
                       {#each group.paths as p (p.origIdx)}
@@ -1526,6 +1649,83 @@
     height: 100%;
     opacity: 0;
     cursor: pointer;
+  }
+  /* ── Gradient controls ─────────────────────────────────────── */
+  .grad-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .grad-toggle:hover:not(:disabled) {
+    border-color: var(--accent);
+  }
+  .grad-toggle:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  .grad-toggle.on {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent) inset;
+  }
+  .grad-chip {
+    width: 13px;
+    height: 13px;
+    border-radius: 3px;
+    background: linear-gradient(135deg, #ff6a00, #ee0979);
+  }
+  .grad-editor {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    padding: 0.45rem 0.5rem 0.45rem 1.75rem;
+  }
+  .grad-stop {
+    position: relative;
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    overflow: hidden;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .grad-stop input[type='color'] {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+  }
+  .grad-angle-range {
+    flex: 1 1 60px;
+    min-width: 50px;
+    accent-color: var(--accent);
+  }
+  .grad-presets {
+    display: flex;
+    gap: 0.3rem;
+  }
+  .grad-preset {
+    width: 20px;
+    height: 20px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    padding: 0;
+    cursor: pointer;
+  }
+  .grad-preset:hover {
+    border-color: var(--accent);
+    transform: scale(1.08);
   }
   .layer-meta {
     flex: 1;
