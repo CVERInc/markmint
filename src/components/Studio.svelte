@@ -86,6 +86,7 @@
   import Wand2 from '@lucide/svelte/icons/wand-2';
   import { History } from '~/lib/history';
   import { detectBackgroundColor, type PathBox } from '~/lib/background';
+  import { applyEffects, type EffectOptions } from '~/lib/effects';
   import type { WorkerRequest, WorkerResponse } from '~/lib/trace.worker';
   import CompareSlider from './CompareSlider.svelte';
 
@@ -251,13 +252,41 @@
     taggedSvg ? applyPathOverrides(taggedSvg, pathStates, autoHiddenIdxs, specklePreviewing) : null,
   );
   const removedIdxs = $derived(collectRemoved(pathStates));
+
+  // Finishing effects (outline / shadow / glow). Slider values are percentages
+  // of the mark's shorter side; `effectOptions` scales them into user units.
+  let fx = $state({
+    outline: { on: false, width: 3, color: '#ffffff' },
+    shadow: { on: false, blur: 3, dx: 0, dy: 4, color: '#000000', opacity: 0.35 },
+    glow: { on: false, blur: 4, color: '#ffffff', opacity: 0.6 },
+  });
+  const effectOptions = $derived.by<EffectOptions>(() => {
+    const vb = svg ? readViewBox(svg) : null;
+    const base = vb ? Math.min(vb.w, vb.h) : 100;
+    const pct = (n: number) => (n / 100) * base;
+    const o: EffectOptions = {};
+    if (fx.outline.on) o.outline = { width: pct(fx.outline.width), color: fx.outline.color };
+    if (fx.shadow.on)
+      o.shadow = {
+        blur: pct(fx.shadow.blur),
+        dx: pct(fx.shadow.dx),
+        dy: pct(fx.shadow.dy),
+        color: fx.shadow.color,
+        opacity: fx.shadow.opacity,
+      };
+    if (fx.glow.on) o.glow = { blur: pct(fx.glow.blur), color: fx.glow.color, opacity: fx.glow.opacity };
+    return o;
+  });
+
   const displaySvg = $derived.by(() => {
     if (!withOverrides) return null;
     const withGradients =
       colorGradients.size > 0
         ? applyColorGradients(withOverrides, colorGradients, pathList)
         : withOverrides;
-    return removedIdxs.length > 0 ? removePaths(withGradients, removedIdxs) : withGradients;
+    const composed =
+      removedIdxs.length > 0 ? removePaths(withGradients, removedIdxs) : withGradients;
+    return applyEffects(composed, effectOptions);
   });
 
   // ── Undo / redo for shape edits (recolor / hide / erase / gradient) ─────────
@@ -802,7 +831,9 @@
     const removed = removedIdxs.length > 0 ? removePaths(gradiented, removedIdxs) : gradiented;
     // Strip the data-orig-idx attrs from the final output (clean SVG)
     const cleaned = removed.replace(/\sdata-orig-idx="\d+"/g, '');
-    return bakeBackdrop(cleaned, backdrop);
+    // Finishing effects wrap the mark; the backdrop is then baked behind it.
+    const styled = applyEffects(cleaned, effectOptions);
+    return bakeBackdrop(styled, backdrop);
   }
 
   function saveBlob(blob: Blob, ext: string, baseName?: string) {
@@ -1200,6 +1231,79 @@
                 <span class="value">{backdrop.padding}%</span>
               </div>
               <input id="bd-padding" type="range" min="0" max="30" step="1" bind:value={backdrop.padding} />
+            </div>
+          </div>
+
+          <div class="card-row" style="width: 100%;">
+            <span class="card-label">Effects</span>
+          </div>
+          <div class="fx-stack">
+            <div class="fx-group">
+              <label class="fx-toggle">
+                <input type="checkbox" bind:checked={fx.outline.on} />
+                <span>Outline</span>
+              </label>
+              {#if fx.outline.on}
+                <div class="color-pick">
+                  <input type="color" bind:value={fx.outline.color} aria-label="Outline color" />
+                </div>
+                <div class="slider tight">
+                  <div class="slider-head"><label for="fx-ow">Width</label><span class="value">{fx.outline.width}%</span></div>
+                  <input id="fx-ow" type="range" min="0.5" max="8" step="0.5" bind:value={fx.outline.width} />
+                </div>
+              {/if}
+            </div>
+
+            <div class="fx-group">
+              <label class="fx-toggle">
+                <input type="checkbox" bind:checked={fx.shadow.on} />
+                <span>Shadow</span>
+              </label>
+              {#if fx.shadow.on}
+                <div class="color-pick">
+                  <input type="color" bind:value={fx.shadow.color} aria-label="Shadow color" />
+                </div>
+                <div class="slider-grid three">
+                  <div class="slider tight">
+                    <div class="slider-head"><label for="fx-sb">Blur</label><span class="value">{fx.shadow.blur}%</span></div>
+                    <input id="fx-sb" type="range" min="0" max="12" step="0.5" bind:value={fx.shadow.blur} />
+                  </div>
+                  <div class="slider tight">
+                    <div class="slider-head"><label for="fx-sx">X</label><span class="value">{fx.shadow.dx}%</span></div>
+                    <input id="fx-sx" type="range" min="-10" max="10" step="0.5" bind:value={fx.shadow.dx} />
+                  </div>
+                  <div class="slider tight">
+                    <div class="slider-head"><label for="fx-sy">Y</label><span class="value">{fx.shadow.dy}%</span></div>
+                    <input id="fx-sy" type="range" min="-10" max="10" step="0.5" bind:value={fx.shadow.dy} />
+                  </div>
+                </div>
+                <div class="slider tight">
+                  <div class="slider-head"><label for="fx-so">Opacity</label><span class="value">{Math.round(fx.shadow.opacity * 100)}%</span></div>
+                  <input id="fx-so" type="range" min="0" max="1" step="0.05" bind:value={fx.shadow.opacity} />
+                </div>
+              {/if}
+            </div>
+
+            <div class="fx-group">
+              <label class="fx-toggle">
+                <input type="checkbox" bind:checked={fx.glow.on} />
+                <span>Glow</span>
+              </label>
+              {#if fx.glow.on}
+                <div class="color-pick">
+                  <input type="color" bind:value={fx.glow.color} aria-label="Glow color" />
+                </div>
+                <div class="slider-grid">
+                  <div class="slider tight">
+                    <div class="slider-head"><label for="fx-gb">Blur</label><span class="value">{fx.glow.blur}%</span></div>
+                    <input id="fx-gb" type="range" min="0" max="14" step="0.5" bind:value={fx.glow.blur} />
+                  </div>
+                  <div class="slider tight">
+                    <div class="slider-head"><label for="fx-go">Opacity</label><span class="value">{Math.round(fx.glow.opacity * 100)}%</span></div>
+                    <input id="fx-go" type="range" min="0" max="1" step="0.05" bind:value={fx.glow.opacity} />
+                  </div>
+                </div>
+              {/if}
             </div>
           </div>
 
@@ -2079,6 +2183,31 @@
   }
   .slider-grid.three {
     grid-template-columns: 1fr 1fr 1fr;
+  }
+  /* ── Finishing effects ── */
+  .fx-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+  .fx-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 0.6rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+  }
+  .fx-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .fx-toggle input {
+    accent-color: var(--accent);
   }
   @media (max-width: 520px) {
     .slider-grid.three {
