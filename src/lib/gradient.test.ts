@@ -97,4 +97,28 @@ describe('applyColorGradients', () => {
     expect(out).toContain('y1="0"');
     expect(out).toContain('y2="100"');
   });
+
+  it('emits a radialGradient centered on the viewBox for type=radial', () => {
+    const radial: GradientSpec = { ...spec, type: 'radial' };
+    const out = applyColorGradients(SVG, new Map([['#ff0000', radial]]), PATHS);
+    expect(out).toContain('<radialGradient');
+    expect(out).not.toContain('<linearGradient');
+    expect(out).toContain('cx="50"');
+    expect(out).toContain('cy="50"');
+    expect(out).toContain('r="50"');
+  });
+
+  it('supports 3+ stops', () => {
+    const three: GradientSpec = {
+      angle: 90,
+      stops: [
+        { color: '#000000', offset: 0 },
+        { color: '#888888', offset: 50 },
+        { color: '#ffffff', offset: 100 },
+      ],
+    };
+    const out = applyColorGradients(SVG, new Map([['#ff0000', three]]), PATHS);
+    expect((out.match(/<stop /g) ?? [])).toHaveLength(3);
+    expect(out).toContain('offset="50%"');
+  });
 });

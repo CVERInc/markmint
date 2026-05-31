@@ -87,6 +87,12 @@
   import { History } from '~/lib/history';
   import { detectBackgroundColor, type PathBox } from '~/lib/background';
   import { applyEffects, type EffectOptions } from '~/lib/effects';
+  import {
+    loadGradientPresets,
+    addGradientPreset,
+    removeGradientPreset,
+    type SavedGradient,
+  } from '~/lib/gradient-presets';
   import type { WorkerRequest, WorkerResponse } from '~/lib/trace.worker';
   import CompareSlider from './CompareSlider.svelte';
 
@@ -415,6 +421,7 @@
 
   onMount(() => {
     customPresets = loadCustomPresets();
+    savedGradients = loadGradientPresets();
     worker = new Worker(new URL('../lib/trace.worker.ts', import.meta.url), { type: 'module' });
     worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
       const target = pendingTargets.get(e.data.id);
@@ -542,6 +549,24 @@
     const cur = colorGradients.get(key);
     if (!cur) return;
     setColorGradient(key, { ...cur, angle });
+  }
+  function setGradientType(key: string, type: 'linear' | 'radial') {
+    const cur = colorGradients.get(key);
+    if (!cur) return;
+    setColorGradient(key, { ...cur, type });
+  }
+  // Savable gradient presets (reuse a gradient across colors / sessions).
+  let savedGradients = $state<SavedGradient[]>([]);
+  function saveCurrentGradient(key: string) {
+    const cur = colorGradients.get(key);
+    if (!cur) return;
+    savedGradients = addGradientPreset(`Gradient ${savedGradients.length + 1}`, cur, Date.now());
+  }
+  function applySavedGradient(key: string, sg: SavedGradient) {
+    setColorGradient(key, structuredClone(sg.spec));
+  }
+  function deleteSavedGradient(name: string) {
+    savedGradients = removeGradientPreset(name);
   }
   function applyGradientPreset(key: string, a: string, b: string, angle: number) {
     setColorGradient(key, {
@@ -1389,6 +1414,22 @@
                           aria-label="Gradient start color"
                         />
                       </label>
+                      <div class="grad-type" role="group" aria-label="Gradient type">
+                        <button
+                          type="button"
+                          class:on={(grad.type ?? 'linear') === 'linear'}
+                          onclick={() => setGradientType(group.color, 'linear')}
+                          title="Linear gradient"
+                          aria-label="Linear gradient"
+                        >Lin</button>
+                        <button
+                          type="button"
+                          class:on={grad.type === 'radial'}
+                          onclick={() => setGradientType(group.color, 'radial')}
+                          title="Radial gradient"
+                          aria-label="Radial gradient"
+                        >Rad</button>
+                      </div>
                       <input
                         class="grad-angle-range"
                         type="range"
@@ -1396,6 +1437,7 @@
                         max="360"
                         step="15"
                         value={grad.angle}
+                        disabled={grad.type === 'radial'}
                         oninput={(e) => setGradientAngle(group.color, +(e.target as HTMLInputElement).value)}
                         aria-label="Gradient angle"
                       />
@@ -1418,6 +1460,24 @@
                             aria-label="Apply {gp.name} gradient"
                           ></button>
                         {/each}
+                        {#each savedGradients as sg (sg.name)}
+                          <button
+                            type="button"
+                            class="grad-preset saved"
+                            style:background={`${sg.spec.type === 'radial' ? 'radial-gradient(circle' : `linear-gradient(${sg.spec.angle + 90}deg`}, ${sg.spec.stops.map((s) => `${s.color} ${s.offset}%`).join(', ')})`}
+                            onclick={() => applySavedGradient(group.color, sg)}
+                            oncontextmenu={(e) => { e.preventDefault(); deleteSavedGradient(sg.name); }}
+                            title={`${sg.name} (right-click to delete)`}
+                            aria-label="Apply {sg.name}"
+                          ></button>
+                        {/each}
+                        <button
+                          type="button"
+                          class="grad-save"
+                          onclick={() => saveCurrentGradient(group.color)}
+                          title="Save this gradient"
+                          aria-label="Save this gradient"
+                        >+</button>
                       </div>
                     </div>
                   {/if}
@@ -2379,9 +2439,32 @@
     min-width: 50px;
     accent-color: var(--accent);
   }
+  .grad-angle-range:disabled {
+    opacity: 0.35;
+  }
+  .grad-type {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .grad-type button {
+    padding: 0.2rem 0.4rem;
+    font-size: 0.7rem;
+    background: transparent;
+    color: var(--muted);
+    border: none;
+    cursor: pointer;
+  }
+  .grad-type button.on {
+    background: var(--accent-bg);
+    color: var(--text);
+  }
   .grad-presets {
     display: flex;
     gap: 0.3rem;
+    flex-wrap: wrap;
+    align-items: center;
   }
   .grad-preset {
     width: 20px;
@@ -2394,6 +2477,25 @@
   .grad-preset:hover {
     border-color: var(--accent);
     transform: scale(1.08);
+  }
+  .grad-preset.saved {
+    box-shadow: 0 0 0 1px var(--accent-bg);
+  }
+  .grad-save {
+    width: 20px;
+    height: 20px;
+    border-radius: 5px;
+    border: 1px dashed var(--border);
+    background: transparent;
+    color: var(--muted);
+    font-size: 0.85rem;
+    line-height: 1;
+    padding: 0;
+    cursor: pointer;
+  }
+  .grad-save:hover {
+    border-color: var(--accent);
+    color: var(--text);
   }
   .layer-meta {
     flex: 1;
