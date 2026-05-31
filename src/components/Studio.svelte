@@ -88,6 +88,7 @@
   import { History } from '~/lib/history';
   import { detectBackgroundColor, type PathBox } from '~/lib/background';
   import { applyEffects, type EffectOptions } from '~/lib/effects';
+  import { imageToAscii } from '~/lib/ascii';
   import { buildSizeSet, DEFAULT_SCALES } from '~/lib/export-set';
   import {
     loadGradientPresets,
@@ -1077,18 +1078,61 @@
   }
 
   // ── Copy as … ─────────────────────────────────────────────────────────────
-  type CopyKind = 'svg' | 'react' | 'vue' | 'datauri';
+  type CopyKind = 'svg' | 'react' | 'vue' | 'datauri' | 'ascii';
   let copiedKind = $state<CopyKind | null>(null);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
+  let asciiCols = $state(100);
+
+  // Rasterize the composed mark and read its pixels back (for ASCII).
+  async function renderImageData(finalSvg: string, longest: number): Promise<ImageData | null> {
+    const vb = readViewBox(finalSvg);
+    const ar = vb && vb.h > 0 ? vb.w / vb.h : 1;
+    const w = ar >= 1 ? longest : Math.max(1, Math.round(longest * ar));
+    const h = ar >= 1 ? Math.max(1, Math.round(longest / ar)) : longest;
+    const sized = finalSvg.replace(
+      /<svg([^>]*)>/i,
+      (_m, a: string) =>
+        `<svg${a.replace(/\s(?:width|height)\s*=\s*"[^"]*"/gi, '')} width="${w}" height="${h}">`,
+    );
+    const url = URL.createObjectURL(new Blob([sized], { type: 'image/svg+xml;charset=utf-8' }));
+    try {
+      const im = new Image();
+      im.decoding = 'async';
+      await new Promise<void>((res, rej) => {
+        im.onload = () => res();
+        im.onerror = () => rej(new Error('Could not render SVG'));
+        im.src = url;
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.drawImage(im, 0, 0, w, h);
+      return ctx.getImageData(0, 0, w, h);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  /** Build the ASCII rendering of the current mark, or null. */
+  async function buildAsciiText(): Promise<string | null> {
+    const finalSvg = buildFinalSvg();
+    if (!finalSvg) return null;
+    const id = await renderImageData(finalSvg, Math.max(240, asciiCols * 3));
+    if (!id) return null;
+    return imageToAscii(id.data, id.width, id.height, { cols: asciiCols });
+  }
 
   async function copyAs(kind: CopyKind) {
     const finalSvg = buildFinalSvg();
     if (!finalSvg) return;
-    let text = finalSvg;
-    if (kind === 'react') text = toReactComponent(finalSvg, toComponentName(file?.name ?? 'Icon'));
-    else if (kind === 'vue') text = toVueComponent(finalSvg);
-    else if (kind === 'datauri') text = toDataUri(finalSvg);
     try {
+      let text = finalSvg;
+      if (kind === 'react') text = toReactComponent(finalSvg, toComponentName(file?.name ?? 'Icon'));
+      else if (kind === 'vue') text = toVueComponent(finalSvg);
+      else if (kind === 'datauri') text = toDataUri(finalSvg);
+      else if (kind === 'ascii') text = (await buildAsciiText()) ?? '';
       await navigator.clipboard.writeText(text);
       copiedKind = kind;
       clearTimeout(copyTimer);
@@ -1097,6 +1141,12 @@
       errorMessage = err instanceof Error ? err.message : String(err);
       status = 'error';
     }
+  }
+
+  async function downloadAscii() {
+    const text = await buildAsciiText();
+    if (text == null || !file) return;
+    saveBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), 'txt', `${stripExtension(file.name)}-ascii`);
   }
 
   function reset() {
@@ -1779,6 +1829,18 @@
                     <button type="button" role="menuitem" onclick={() => copyAs('datauri')}>
                       Data URI{copiedKind === 'datauri' ? ' ✓' : ''}
                     </button>
+                    <div class="copy-divider" aria-hidden="true"></div>
+                    <button type="button" role="menuitem" onclick={() => copyAs('ascii')}>
+                      ASCII art{copiedKind === 'ascii' ? ' ✓' : ''}
+                    </button>
+                    <button type="button" role="menuitem" onclick={downloadAscii}>
+                      ASCII → .txt
+                    </button>
+                    <label class="copy-ascii-cols">
+                      <span>Width</span>
+                      <input type="number" min="20" max="400" step="10" bind:value={asciiCols} />
+                      <span>cols</span>
+                    </label>
                   </div>
                 </details>
               </div>
@@ -2922,6 +2984,28 @@
   }
   .copy-options button:hover {
     background: var(--accent-bg);
+  }
+  .copy-divider {
+    height: 1px;
+    margin: 0.25rem 0.3rem;
+    background: var(--border);
+  }
+  .copy-ascii-cols {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.6rem;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+  .copy-ascii-cols input {
+    width: 4rem;
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 0.2rem 0.35rem;
+    font-family: inherit;
   }
   .export-select {
     display: inline-flex;
