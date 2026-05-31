@@ -34,6 +34,7 @@
     DEFAULT_BACKDROP,
     backdropCss,
     backdropVisible,
+    readViewBox,
     type BackdropOpts,
   } from '~/lib/backdrop';
   import { injectOrigIdx, removePaths } from '~/lib/punch-hole';
@@ -457,23 +458,111 @@
     worker.postMessage(req, [clone]);
   }
 
-  function download() {
-    if (!svg || !file) return;
+  // Bake all edits (recolor / hide / punch-hole / backdrop) into one clean SVG.
+  function buildFinalSvg(): string | null {
+    if (!svg) return null;
     const tagged = injectOrigIdx(svg);
     const overridden = applyPathOverrides(tagged, pathStates);
     const removed = removedIdxs.length > 0 ? removePaths(overridden, removedIdxs) : overridden;
     // Strip the data-orig-idx attrs from the final output (clean SVG)
     const cleaned = removed.replace(/\sdata-orig-idx="\d+"/g, '');
-    const finalSvg = bakeBackdrop(cleaned, backdrop);
-    const blob = new Blob([finalSvg], { type: 'image/svg+xml' });
+    return bakeBackdrop(cleaned, backdrop);
+  }
+
+  function saveBlob(blob: Blob, ext: string) {
+    if (!file) return;
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${stripExtension(file.name)}.svg`;
+    a.download = `${stripExtension(file.name)}.${ext}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  }
+
+  // Raster export: render the composed SVG to a canvas via the browser's own
+  // image pipeline (no extra WASM) and read it back with toBlob. Single
+  // direction only — we export the traced/composed result, never transcode
+  // an arbitrary upload.
+  type RasterFmt = 'png' | 'webp' | 'jpeg';
+  const RASTER_MIME: Record<RasterFmt, string> = {
+    png: 'image/png',
+    webp: 'image/webp',
+    jpeg: 'image/jpeg',
+  };
+
+  let downloadFormat = $state<'svg' | RasterFmt>('svg');
+  let rasterSize = $state<number>(512); // longest edge in px (0 = source resolution)
+  let exporting = $state(false);
+
+  async function rasterize(finalSvg: string, fmt: RasterFmt): Promise<Blob> {
+    const vb = readViewBox(finalSvg);
+    const ar = vb && vb.h > 0 ? vb.w / vb.h : 1;
+    const longest =
+      rasterSize > 0
+        ? rasterSize
+        : Math.max(pixelsCache?.width ?? 512, pixelsCache?.height ?? 512);
+    const w = ar >= 1 ? longest : Math.max(1, Math.round(longest * ar));
+    const h = ar >= 1 ? Math.max(1, Math.round(longest / ar)) : longest;
+
+    // Give the SVG explicit pixel dims so the <img> rasterizes at full res.
+    const sized = finalSvg.replace(
+      /<svg([^>]*)>/i,
+      (_m, attrs: string) =>
+        `<svg${attrs.replace(/\s(?:width|height)\s*=\s*"[^"]*"/gi, '')} width="${w}" height="${h}">`,
+    );
+
+    const url = URL.createObjectURL(new Blob([sized], { type: 'image/svg+xml;charset=utf-8' }));
+    try {
+      const img = new Image();
+      img.decoding = 'async';
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('Could not render SVG'));
+        img.src = url;
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Canvas not available');
+      // JPEG has no alpha — flatten transparency onto white instead of black.
+      if (fmt === 'jpeg') {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
+      }
+      ctx.drawImage(img, 0, 0, w, h);
+      return await new Promise<Blob>((resolve, reject) =>
+        canvas.toBlob(
+          (b) => (b ? resolve(b) : reject(new Error('Export failed'))),
+          RASTER_MIME[fmt],
+          fmt === 'jpeg' ? 0.92 : undefined,
+        ),
+      );
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  async function download() {
+    if (!svg || !file || exporting) return;
+    const finalSvg = buildFinalSvg();
+    if (!finalSvg) return;
+    if (downloadFormat === 'svg') {
+      saveBlob(new Blob([finalSvg], { type: 'image/svg+xml' }), 'svg');
+      return;
+    }
+    exporting = true;
+    try {
+      const blob = await rasterize(finalSvg, downloadFormat);
+      saveBlob(blob, downloadFormat === 'jpeg' ? 'jpg' : downloadFormat);
+    } catch (err) {
+      errorMessage = err instanceof Error ? err.message : String(err);
+      status = 'error';
+    } finally {
+      exporting = false;
+    }
   }
 
   function reset() {
@@ -908,8 +997,31 @@
                 {/if}
               </div>
               <div class="result-actions">
-                <button class="primary" type="button" onclick={download}>
-                  <Download size={16} />
+                <label class="export-select" title="Output format">
+                  <select bind:value={downloadFormat} aria-label="Output format">
+                    <option value="svg">SVG</option>
+                    <option value="png">PNG</option>
+                    <option value="webp">WebP</option>
+                    <option value="jpeg">JPG</option>
+                  </select>
+                </label>
+                {#if downloadFormat !== 'svg'}
+                  <label class="export-select" title="Pixel size (longest edge)">
+                    <select bind:value={rasterSize} aria-label="Pixel size">
+                      <option value={0}>Source</option>
+                      <option value={1024}>1024px</option>
+                      <option value={512}>512px</option>
+                      <option value={256}>256px</option>
+                      <option value={128}>128px</option>
+                    </select>
+                  </label>
+                {/if}
+                <button class="primary" type="button" onclick={download} disabled={exporting}>
+                  {#if exporting}
+                    <Loader2 size={16} class="spin" />
+                  {:else}
+                    <Download size={16} />
+                  {/if}
                   <span>Download</span>
                 </button>
               </div>
@@ -1749,6 +1861,28 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+  }
+  .export-select {
+    display: inline-flex;
+  }
+  .export-select select {
+    appearance: none;
+    -webkit-appearance: none;
+    padding: 0.4rem 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    cursor: pointer;
+  }
+  .export-select select:hover {
+    border-color: var(--accent);
+  }
+  .export-select select:focus-visible {
+    outline: none;
+    border-color: var(--accent);
   }
   .size-compare {
     display: flex;
