@@ -83,7 +83,9 @@
   import Eye from '@lucide/svelte/icons/eye';
   import Undo2 from '@lucide/svelte/icons/undo-2';
   import Redo2 from '@lucide/svelte/icons/redo-2';
+  import Wand2 from '@lucide/svelte/icons/wand-2';
   import { History } from '~/lib/history';
+  import { detectBackgroundColor, type PathBox } from '~/lib/background';
   import type { WorkerRequest, WorkerResponse } from '~/lib/trace.worker';
   import CompareSlider from './CompareSlider.svelte';
 
@@ -457,6 +459,28 @@
   }
   function bulkRemove(originalFill: string, removed: boolean) {
     pathStates = bulkSetRemoved(pathStates, pathList, originalFill, removed);
+  }
+
+  // ── One-click background removal ────────────────────────────────────────────
+  const detectedBackground = $derived.by<string | null>(() => {
+    if (!svg || pathBBoxes.size === 0) return null;
+    const vb = readViewBox(svg);
+    if (!vb) return null;
+    const boxes: PathBox[] = [];
+    for (const p of pathList) {
+      const bb = pathBBoxes.get(p.origIdx);
+      if (bb) boxes.push({ fill: p.originalFill, x: bb.x, y: bb.y, w: bb.w, h: bb.h });
+    }
+    return detectBackgroundColor(boxes, vb);
+  });
+  // Hide the button once the detected background's paths are all removed.
+  const backgroundRemoved = $derived.by(() => {
+    if (!detectedBackground) return false;
+    const grp = pathList.filter((p) => p.originalFill === detectedBackground);
+    return grp.length > 0 && grp.every((p) => pathStates.get(p.origIdx)?.removed);
+  });
+  function removeBackground() {
+    if (detectedBackground) bulkRemove(detectedBackground, true);
   }
 
   // ── Gradient fills (per color group) ──────────────────────────────
@@ -1674,6 +1698,18 @@
                 >
                   <Redo2 size={14} />
                 </button>
+                {#if detectedBackground && !backgroundRemoved}
+                  <div class="tool-divider" aria-hidden="true"></div>
+                  <button
+                    type="button"
+                    class="tool-btn"
+                    onclick={removeBackground}
+                    title={`Remove the detected background (${detectedBackground})`}
+                  >
+                    <Wand2 size={14} />
+                    <span>Remove BG</span>
+                  </button>
+                {/if}
               </div>
 
               <div class="hide-actions">
