@@ -65,7 +65,7 @@
     generateWebManifest,
     generateHtmlSnippet,
   } from '~/lib/icon-pack';
-  import type { WorkerRequest, WorkerResponse } from '~/lib/vectorize.worker';
+  import type { WorkerRequest, WorkerResponse } from '~/lib/trace.worker';
   import CompareSlider from './CompareSlider.svelte';
 
   type Status = 'idle' | 'converting' | 'done' | 'error';
@@ -256,7 +256,7 @@
 
   onMount(() => {
     customPresets = loadCustomPresets();
-    worker = new Worker(new URL('../lib/vectorize.worker.ts', import.meta.url), { type: 'module' });
+    worker = new Worker(new URL('../lib/trace.worker.ts', import.meta.url), { type: 'module' });
     worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
       if (e.data.id !== lastId) return;
       if (e.data.type === 'done') {
@@ -742,7 +742,7 @@
   }
 </script>
 
-<section class="vectorizer">
+<section class="studio">
   {#if !file}
     <label
       class="dropzone"
@@ -1413,7 +1413,7 @@
 </section>
 
 <style>
-  .vectorizer {
+  .studio {
     display: flex;
     flex-direction: column;
     gap: 1.25rem;

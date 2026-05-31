@@ -33,7 +33,7 @@ markmint:
 - Runs **entirely in your browser** via WebAssembly — your image never leaves
   your machine.
 - Uses [**VTracer**](https://github.com/visioncortex/vtracer), a modern Rust
-  vectorizer that handles **color**, not just black and white, in a Web Worker
+  tracing engine that handles **color**, not just black and white, in a Web Worker
   so the UI stays responsive.
 - Is a **studio, not a one-shot tool** — recolor, gradient-fill, hide/erase, and
   compose your mark, then export.
@@ -109,11 +109,11 @@ Pages, or your own nginx. **No server runtime is required.**
 markmint/
 ├─ src/
 │  ├─ components/
-│  │  ├─ Vectorizer.svelte    # the studio UI (trace, edit, export)
+│  │  ├─ Studio.svelte        # the studio UI (trace, edit, export)
 │  │  ├─ CompareSlider.svelte # before/after slider
 │  │  └─ Hero.svelte          # title + language switcher
 │  ├─ lib/
-│  │  ├─ vectorize.ts / .worker.ts  # wasm wrapper + worker
+│  │  ├─ trace.ts / .worker.ts      # wasm wrapper + worker
 │  │  ├─ presets.ts                 # logo / sketch / photo / pixel-art
 │  │  ├─ recolor.ts · path-state.ts · gradient.ts  # edit pipeline
 │  │  ├─ punch-hole.ts · strip-artifact.ts · backdrop.ts
