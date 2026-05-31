@@ -81,6 +81,9 @@
   } from '~/lib/compose-layers';
   import Plus from '@lucide/svelte/icons/plus';
   import Eye from '@lucide/svelte/icons/eye';
+  import Undo2 from '@lucide/svelte/icons/undo-2';
+  import Redo2 from '@lucide/svelte/icons/redo-2';
+  import { History } from '~/lib/history';
   import type { WorkerRequest, WorkerResponse } from '~/lib/trace.worker';
   import CompareSlider from './CompareSlider.svelte';
 
@@ -255,7 +258,64 @@
     return removedIdxs.length > 0 ? removePaths(withGradients, removedIdxs) : withGradients;
   });
 
-  // Reset per-path state whenever the source SVG changes (new trace).
+  // ── Undo / redo for shape edits (recolor / hide / erase / gradient) ─────────
+  interface EditSnapshot {
+    pathStates: Map<number, PathState>;
+    colorGradients: Map<string, GradientSpec>;
+  }
+  const editHistory = new History<EditSnapshot>(100);
+  let canUndo = $state(false);
+  let canRedo = $state(false);
+
+  function editSnapshot(): EditSnapshot {
+    return { pathStates: new Map(pathStates), colorGradients: new Map(colorGradients) };
+  }
+  function snapEqual(a: EditSnapshot, b: EditSnapshot): boolean {
+    if (a.pathStates.size !== b.pathStates.size) return false;
+    if (a.colorGradients.size !== b.colorGradients.size) return false;
+    for (const [k, v] of a.pathStates) {
+      const o = b.pathStates.get(k);
+      if (!o || o.fill !== v.fill || o.removed !== v.removed) return false;
+    }
+    for (const [k, v] of a.colorGradients) {
+      if (JSON.stringify(b.colorGradients.get(k)) !== JSON.stringify(v)) return false;
+    }
+    return true;
+  }
+  function syncHistoryFlags() {
+    canUndo = editHistory.canUndo;
+    canRedo = editHistory.canRedo;
+  }
+  function applySnapshot(s: EditSnapshot) {
+    pathStates = new Map(s.pathStates);
+    colorGradients = new Map(s.colorGradients);
+  }
+  function undoEdit() {
+    const s = editHistory.undo();
+    if (s) applySnapshot(s); // cursor now equals s → recorder self-skips
+    syncHistoryFlags();
+  }
+  function redoEdit() {
+    const s = editHistory.redo();
+    if (s) applySnapshot(s);
+    syncHistoryFlags();
+  }
+  function onKeydown(e: KeyboardEvent) {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    const t = e.target as HTMLElement | null;
+    if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+    const key = e.key.toLowerCase();
+    if (key === 'z') {
+      e.preventDefault();
+      if (e.shiftKey) redoEdit();
+      else undoEdit();
+    } else if (key === 'y') {
+      e.preventDefault();
+      redoEdit();
+    }
+  }
+
+  // Reset per-path state whenever the source SVG changes (new trace / recompose).
   let lastSvgRef = $state<string | null>(null);
   $effect(() => {
     if (svg !== lastSvgRef) {
@@ -265,7 +325,23 @@
       expandedGroups = new Set();
       hoveredPathIdx = null;
       speckleThreshold = 0;
+      editHistory.reset({ pathStates: new Map(), colorGradients: new Map() });
+      syncHistoryFlags();
     }
+  });
+
+  // Record an undo step whenever the edit maps drift from the history cursor.
+  // After undo/redo the cursor already holds the restored state, so this
+  // self-skips — no restore flag needed.
+  $effect(() => {
+    pathStates;
+    colorGradients; // track
+    const top = editHistory.current;
+    if (!top) return;
+    const snap = editSnapshot();
+    if (snapEqual(snap, top)) return;
+    editHistory.push(snap);
+    syncHistoryFlags();
   });
 
   // Bidirectional hover sync: highlight the canvas path when hovering a
@@ -934,6 +1010,8 @@
   }
 </script>
 
+<svelte:window onkeydown={onKeydown} />
+
 <section class="studio">
   {#if !file}
     <label
@@ -1574,6 +1652,27 @@
                 >
                   <Eraser size={14} />
                   <span>Eraser Tool</span>
+                </button>
+                <div class="tool-divider" aria-hidden="true"></div>
+                <button
+                  type="button"
+                  class="tool-btn icon-only"
+                  onclick={undoEdit}
+                  disabled={!canUndo}
+                  title="Undo (⌘/Ctrl+Z)"
+                  aria-label="Undo"
+                >
+                  <Undo2 size={14} />
+                </button>
+                <button
+                  type="button"
+                  class="tool-btn icon-only"
+                  onclick={redoEdit}
+                  disabled={!canRedo}
+                  title="Redo (⌘/Ctrl+Shift+Z)"
+                  aria-label="Redo"
+                >
+                  <Redo2 size={14} />
                 </button>
               </div>
 
@@ -2755,11 +2854,25 @@
   }
   .tool-group {
     display: flex;
+    align-items: center;
     gap: 2px;
     background: rgba(255, 255, 255, 0.05);
     padding: 2px;
     border-radius: 6px;
     border: 1px solid var(--border);
+  }
+  .tool-divider {
+    width: 1px;
+    align-self: stretch;
+    margin: 2px 4px;
+    background: var(--border);
+  }
+  .tool-btn.icon-only {
+    padding: 0.35rem;
+  }
+  .tool-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
   .tool-btn {
     display: flex;
