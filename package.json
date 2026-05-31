@@ -1,20 +1,20 @@
 {
-  "name": "@cver/vectorize",
+  "name": "@cver/markmint",
   "version": "0.1.0",
   "type": "module",
   "description": "Open-source raster (JPG/PNG) to SVG converter. Runs entirely in the browser via WebAssembly.",
   "license": "MIT",
-  "homepage": "https://github.com/CVERInc/vectorize",
+  "homepage": "https://github.com/CVERInc/markmint",
   "repository": {
     "type": "git",
-    "url": "https://github.com/CVERInc/vectorize.git"
+    "url": "https://github.com/CVERInc/markmint.git"
   },
   "bugs": {
-    "url": "https://github.com/CVERInc/vectorize/issues"
+    "url": "https://github.com/CVERInc/markmint/issues"
   },
   "keywords": [
     "svg",
-    "vectorize",
+    "markmint",
     "raster-to-svg",
     "png-to-svg",
     "jpg-to-svg",

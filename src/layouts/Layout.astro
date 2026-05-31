@@ -5,12 +5,12 @@ interface Props {
 }
 
 const {
-  title = 'vectorize — open-source raster to SVG converter',
-  description = 'Convert PNG, JPG, WebP to clean SVG in your browser. Open source, MIT-licensed, no upload required.',
+  title = 'markmint — turn images into clean SVG logos & icons',
+  description = 'Turn PNG, JPG, WebP into clean, recolorable SVG logos and icons — in your browser. Open source, MIT-licensed, no upload required.',
 } = Astro.props;
 
 const faviconHref = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/favicon.svg`;
-const repo = 'https://github.com/CVERInc/vectorize';
+const repo = 'https://github.com/CVERInc/markmint';
 ---
 
 <!doctype html>
@@ -28,8 +28,8 @@ const repo = 'https://github.com/CVERInc/vectorize';
   </head>
   <body>
     <header class="site-header">
-      <a href="https://cver.net/oss/vectorize" class="brand">
-        <span class="brand-name">vectorize</span>
+      <a href="https://cver.net/oss/markmint" class="brand">
+        <span class="brand-name">markmint</span>
         <span class="brand-badge">by cver.net</span>
       </a>
       <a href={repo} class="gh-link" target="_blank" rel="noopener" aria-label="GitHub repository">

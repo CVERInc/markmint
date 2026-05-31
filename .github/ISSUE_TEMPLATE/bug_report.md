@@ -37,7 +37,7 @@ For convert quality bugs, this is essential.
 
 - OS:
 - Browser:
-- vectorize version / commit:
+- markmint version / commit:
 - Online demo, or self-hosted?
 
 ### Console errors
