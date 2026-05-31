@@ -57,6 +57,8 @@
   } from '~/lib/gradient';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import Package from '@lucide/svelte/icons/package';
+  import Copy from '@lucide/svelte/icons/copy';
+  import Check from '@lucide/svelte/icons/check';
   import { zipSync } from 'fflate';
   import { buildIco } from '~/lib/ico';
   import {
@@ -65,6 +67,12 @@
     generateWebManifest,
     generateHtmlSnippet,
   } from '~/lib/icon-pack';
+  import {
+    toComponentName,
+    toDataUri,
+    toReactComponent,
+    toVueComponent,
+  } from '~/lib/copy-as';
   import type { WorkerRequest, WorkerResponse } from '~/lib/trace.worker';
   import CompareSlider from './CompareSlider.svelte';
 
@@ -725,6 +733,29 @@
     }
   }
 
+  // ── Copy as … ─────────────────────────────────────────────────────────────
+  type CopyKind = 'svg' | 'react' | 'vue' | 'datauri';
+  let copiedKind = $state<CopyKind | null>(null);
+  let copyTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function copyAs(kind: CopyKind) {
+    const finalSvg = buildFinalSvg();
+    if (!finalSvg) return;
+    let text = finalSvg;
+    if (kind === 'react') text = toReactComponent(finalSvg, toComponentName(file?.name ?? 'Icon'));
+    else if (kind === 'vue') text = toVueComponent(finalSvg);
+    else if (kind === 'datauri') text = toDataUri(finalSvg);
+    try {
+      await navigator.clipboard.writeText(text);
+      copiedKind = kind;
+      clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => (copiedKind = null), 1500);
+    } catch (err) {
+      errorMessage = err instanceof Error ? err.message : String(err);
+      status = 'error';
+    }
+  }
+
   function reset() {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     if (debounceTimer) clearTimeout(debounceTimer);
@@ -1260,6 +1291,30 @@
                   {/if}
                   <span>Icon pack</span>
                 </button>
+                <details class="copy-menu">
+                  <summary class="ghost" title="Copy the result to the clipboard">
+                    {#if copiedKind}
+                      <Check size={16} />
+                    {:else}
+                      <Copy size={16} />
+                    {/if}
+                    <span>Copy</span>
+                  </summary>
+                  <div class="copy-options" role="menu">
+                    <button type="button" role="menuitem" onclick={() => copyAs('svg')}>
+                      SVG{copiedKind === 'svg' ? ' ✓' : ''}
+                    </button>
+                    <button type="button" role="menuitem" onclick={() => copyAs('react')}>
+                      React component{copiedKind === 'react' ? ' ✓' : ''}
+                    </button>
+                    <button type="button" role="menuitem" onclick={() => copyAs('vue')}>
+                      Vue component{copiedKind === 'vue' ? ' ✓' : ''}
+                    </button>
+                    <button type="button" role="menuitem" onclick={() => copyAs('datauri')}>
+                      Data URI{copiedKind === 'datauri' ? ' ✓' : ''}
+                    </button>
+                  </div>
+                </details>
               </div>
             </div>
             <div class="editor-toolbar">
@@ -2174,6 +2229,58 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+  }
+  /* Copy-as disclosure menu (native <details>) */
+  .copy-menu {
+    position: relative;
+  }
+  .copy-menu summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.55rem 1rem;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    cursor: pointer;
+    list-style: none;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .copy-menu summary::-webkit-details-marker {
+    display: none;
+  }
+  .copy-menu summary:hover {
+    border-color: var(--accent);
+  }
+  .copy-options {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 0.35rem);
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    min-width: 11rem;
+    padding: 0.3rem;
+    border-radius: 10px;
+    background: #0a3a3b;
+    border: 1px solid var(--border);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  }
+  .copy-options button {
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.85rem;
+    padding: 0.5rem 0.6rem;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .copy-options button:hover {
+    background: var(--accent-bg);
   }
   .export-select {
     display: inline-flex;
